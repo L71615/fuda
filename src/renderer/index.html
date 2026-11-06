@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'" />
+    <title>浮答</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="shell" class="shell">
+      <header class="titlebar">
+        <div class="brand">
+          <span class="dot" id="stealthDot" title="隐身状态"></span>
+          <span class="brand-name">浮答</span>
+          <span class="badge" id="stealthBadge">隐身 ?</span>
+        </div>
+        <nav class="modes" id="modes">
+          <button class="mode active" data-mode="answer">答题</button>
+          <button class="mode" data-mode="listen">听题</button>
+          <button class="mode" data-mode="code">代码</button>
+        </nav>
+        <div class="title-actions">
+          <button class="icon" id="btnRescue" title="救场：答不上来时给一段体面绕过去的话 (Ctrl+Alt+S)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3.4" /><path d="M5.7 5.7l3.7 3.7M14.6 14.6l3.7 3.7M18.3 5.7l-3.7 3.7M9.4 14.6l-3.7 3.7" /></svg></button>
+          <button class="icon" id="btnCapture" title="截屏提问 (Ctrl+D)"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M16 3h3a2 2 0 0 1 2 2v3" /><path d="M8 21H5a2 2 0 0 1-2-2v-3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg></button>
+          <button class="icon" id="btnMic" title="语音提问：点一下开始录音，再点一下停止并转文字"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" /><path d="M12 18v3" /></svg></button>
+          <button class="icon" id="btnClipboard" title="读剪贴板提问"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /></svg></button>
+          <button class="icon" id="btnMouse" title="鼠标穿透 (Ctrl+Shift+X)"><svg viewBox="0 0 24 24"><path d="M6 3l5.5 14 2-5.5L19 9.5z" /><path d="M14.5 14.5L20 20" /></svg></button>
+          <button class="icon" id="btnSettings" title="设置"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1" /></svg></button>
+          <button class="icon danger" id="btnClose" title="隐藏窗口 (Ctrl+E 开/关)"><svg viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" /></svg></button>
+        </div>
+      </header>
+
+      <main class="messages" id="messages">
+        <div class="empty" id="empty">
+          <p class="empty-title" id="emptyHint">Ctrl+E 开关窗口 · Ctrl+D 截屏提问 · Ctrl+Shift+R 清空</p>
+          <p class="empty-sub" id="emptySub">点 ⚙ 选服务商、填 API Key 就能用（OpenAI / DeepSeek / Kimi / 硅基流动 / 本机 Ollama 都支持）。</p>
+        </div>
+      </main>
+
+      <div class="attach-bar" id="attachBar" hidden>
+        <img id="attachThumb" alt="截图预览" />
+        <div class="attach-meta">
+          <span id="attachSize">截图</span>
+          <button class="link" id="attachRemove">移除</button>
+        </div>
+      </div>
+
+      <footer class="composer">
+        <textarea id="input" rows="1" placeholder="粘贴问题 / 截屏提问（Ctrl+D）… Enter 发送，Shift+Enter 换行"></textarea>
+        <div class="composer-actions">
+          <button class="ghost" id="btnStop" hidden>停止</button>
+          <button class="send" id="btnSend">发送</button>
+        </div>
+      </footer>
+
+      <div class="toast" id="toast" hidden></div>
+      <div class="mouse-through-banner" id="mouseBanner" hidden>
+        鼠标穿透中 —— 按 <kbd id="mouseThroughKbd">Ctrl+Shift+X</kbd> 恢复点击
+      </div>
+
+      <section class="settings" id="settings" hidden>
+        <div class="settings-head">
+          <h2>设置</h2>
+          <button class="icon" id="btnSettingsClose"><svg viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" /></svg></button>
+        </div>
+        <div class="settings-body">
+          <div class="section-title">AI 接口</div>
+          <div class="row">
+            <label class="field">
+              <span>服务商</span>
+              <select id="fProvider"></select>
+              <small id="fProviderHint">选一个就会自动填好接口地址和模型</small>
+            </label>
+            <label class="field">
+              <span>接口地址（OpenAI 兼容）</span>
+              <input id="fEndpoint" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+              <small>任何支持 /chat/completions 的地址都行，包括中转网关</small>
+            </label>
+          </div>
+          <label class="field">
+            <span>API Key</span>
+            <input id="fApiKey" type="password" spellcheck="false" placeholder="sk-..." />
+            <small>只保存在本机 <code>.user-data\settings.json</code>，不经过任何第三方</small>
+          </label>
+          <div class="row">
+            <label class="field">
+              <span>文本模型</span>
+              <input id="fModel" type="text" spellcheck="false" placeholder="deepseek-chat" />
+            </label>
+            <label class="field">
+              <span>视觉模型（截图提问用，可留空）</span>
+              <input id="fVisionModel" type="text" spellcheck="false" placeholder="留空 = 沿用文本模型" />
+            </label>
+          </div>
+          <div class="section-title">生成参数</div>
+          <div class="row">
+            <label class="field">
+              <span>温度</span>
+              <input id="fTemperature" type="number" min="0" max="2" step="0.1" />
+            </label>
+            <label class="field">
+              <span>最大输出 token</span>
+              <input id="fMaxTokens" type="number" min="64" max="8000" step="64" />
+            </label>
+            <label class="field">
+              <span>超时（秒）</span>
+              <input id="fTimeout" type="number" min="5" max="600" step="5" />
+            </label>
+          </div>
+          <label class="field">
+            <span>系统提示词</span>
+            <textarea id="fSystemPrompt" rows="5"></textarea>
+          </label>
+          <label class="field check">
+            <input id="fAnswerCard" type="checkbox" />
+            <span>要点卡模式：先给一句话结论，细节折叠，最后给 3 个预测追问</span>
+          </label>
+
+          <fieldset class="group">
+            <legend>隐身</legend>
+            <label class="check"><input type="checkbox" id="fContentProtection" /> Electron 内容保护（setContentProtection）</label>
+            <label class="check"><input type="checkbox" id="fDisplayAffinity" /> Win32 显示亲和（WDA_EXCLUDEFROMCAPTURE=17，失败降级 WDA_MONITOR=1）</label>
+            <label class="check"><input type="checkbox" id="fHideTaskbar" /> 从任务栏 / Alt-Tab 隐藏（WS_EX_TOOLWINDOW）</label>
+            <div class="inline-status">读回状态：<code id="affinityRead">-</code> <button class="link" id="btnReapply">重新施加</button></div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>窗口</legend>
+            <label class="field inline">
+              <span>不透明度</span>
+              <input id="fOpacity" type="range" min="0.15" max="1" step="0.01" />
+              <code id="opacityValue">96%</code>
+            </label>
+            <div class="inline-status" id="hotkeyList"></div>
+          </fieldset>
+
+          <div class="settings-actions">
+            <button class="ghost" id="btnTest">测试连接</button>
+            <button class="ghost" id="btnModels">列出模型</button>
+            <button class="ghost" id="btnRecords">打开记录</button>
+            <button class="ghost danger" id="btnQuit">退出程序</button>
+            <button class="send" id="btnSaveSettings">保存</button>
+          </div>
+          <pre class="probe" id="probeOutput" hidden></pre>
+        </div>
+      </section>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

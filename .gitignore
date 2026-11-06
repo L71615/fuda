@@ -1,0 +1,14 @@
+node_modules/
+runtime/
+dist/
+out/
+.tmp/
+.cache/
+.user-data/
+*.log
+*.exe
+*.asar
+*.zip
+*.7z
+.env*
+*.pem

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    />
+    <title>浮答 · 工作台</title>
+    <link rel="stylesheet" href="setup.css" />
+  </head>
+  <body>
+    <header class="titlebar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 6.5 9.6 17 5 12.4" />
+          </svg>
+        </span>
+        <b>浮答</b>
+        <span class="sub">工作台</span>
+      </div>
+      <div class="spacer"></div>
+      <span class="title-hint" id="titleHint">填好这些，回答才会像“你”在说</span>
+      <button id="btnEnter" class="primary small">进入对话</button>
+      <div class="winbtns">
+        <button id="btnMin" class="winbtn" title="最小化" aria-label="最小化">
+          <svg viewBox="0 0 12 12"><path d="M2.5 6h7" /></svg>
+        </button>
+        <button id="btnMax" class="winbtn" title="最大化" aria-label="最大化">
+          <svg viewBox="0 0 12 12" class="ico-max"><rect x="2.6" y="2.6" width="6.8" height="6.8" rx="1.2" /></svg>
+          <svg viewBox="0 0 12 12" class="ico-restore" hidden><rect x="2.4" y="3.8" width="5.4" height="5.4" rx="1" /><path d="M4.4 3.8V2.9a1 1 0 0 1 1-1h3.1a1 1 0 0 1 1 1v3.1a1 1 0 0 1-1 1h-.9" /></svg>
+        </button>
+        <button id="btnClose" class="winbtn danger" title="关闭工作台" aria-label="关闭">
+          <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <!-- 左侧导航 -->
+      <nav class="nav">
+        <div class="nav-label">我的资料</div>
+        <div class="nav-items">
+          <button class="nav-item is-active" data-tab="resume">
+            <span class="nav-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                <path d="M14 3v5h5" />
+                <path d="M9 13h6M9 17h4" />
+              </svg>
+            </span>
+            <span class="nav-body">
+              <b>简历</b>
+              <i id="navResumeSub">未填写</i>
+            </span>
+            <span class="nav-dot" id="navResumeDot"></span>
+          </button>
+          <button class="nav-item" data-tab="job">
+            <span class="nav-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="7" width="18" height="13" rx="2.5" />
+                <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" />
+                <path d="M3 12.5h18" />
+              </svg>
+            </span>
+            <span class="nav-body">
+              <b>目标岗位</b>
+              <i id="navJobSub">未填写</i>
+            </span>
+            <span class="nav-dot" id="navJobDot"></span>
+          </button>
+          <button class="nav-item" data-tab="docs">
+            <span class="nav-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h3l2 2.5h5A2.5 2.5 0 0 1 19 10v6.5A2.5 2.5 0 0 1 16.5 19h-10A2.5 2.5 0 0 1 4 16.5z" />
+              </svg>
+            </span>
+            <span class="nav-body">
+              <b>资料库</b>
+              <i id="navDocsSub">0 篇</i>
+            </span>
+            <span class="nav-dot opt" id="navDocsDot"></span>
+          </button>
+          <button class="nav-item" data-tab="model">
+            <span class="nav-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+                <circle cx="12" cy="12" r="3.4" />
+              </svg>
+            </span>
+            <span class="nav-body">
+              <b>AI 接口</b>
+              <i id="navModelSub">未配置</i>
+            </span>
+            <span class="nav-dot" id="navModelDot"></span>
+          </button>
+        </div>
+
+        <div class="nav-foot">
+          <h3>就绪检查</h3>
+          <ul class="checklist" id="readiness"></ul>
+          <button id="btnStart" class="primary">开始面谈</button>
+          <button id="btnChatOnly" class="ghost">先随便聊聊</button>
+          <label class="switch" title="关掉后，下次启动直接进悬浮窗；想回这个页面：托盘右键 →「工作台…」">
+            <input type="checkbox" id="chkStartInWorkspace" checked />
+            <span>启动时先开这个页面</span>
+          </label>
+          <p class="tiny">
+            <b>Ctrl+E</b> 呼出悬浮窗 · <b>Ctrl+D</b> 截屏提问<br />随时可从托盘「工作台…」回来改。
+          </p>
+        </div>
+      </nav>
+
+      <!-- 中间：当前项编辑区 -->
+      <main class="editor">
+        <section class="pane" id="paneResume">
+          <div class="pane-head">
+            <div class="pane-title">
+              <h2>简历</h2>
+              <p class="hint">面试官问的都是简历上的经历。粘贴全文或直接上传 PDF / Word，右侧显示完整内容。</p>
+            </div>
+            <div class="pane-meta">
+              <span class="state" id="resumeState">未填写</span>
+              <span class="count" id="resumeCount">0 字</span>
+            </div>
+          </div>
+          <div class="uploader" id="dropResume">
+            <textarea id="resumeText" placeholder="把简历全文粘贴到这里，或把 PDF / Word / txt / md 文件拖进这个框…"></textarea>
+            <div class="uploader-bar">
+              <button id="btnImportResume" class="ghost">上传文件</button>
+              <span class="formats">PDF · DOCX · TXT · MD</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane" id="paneJob" hidden>
+          <div class="pane-head">
+            <div class="pane-title">
+              <h2>目标岗位</h2>
+              <p class="hint">岗位决定它站在什么角度回答。JD 填了更好，会让答案贴住对方的要求；右侧实时显示岗位卡片。</p>
+            </div>
+            <div class="pane-meta"><span class="state" id="jobState">未填写</span></div>
+          </div>
+          <div class="grid2">
+            <label class="field">
+              <span>公司</span>
+              <input id="jobCompany" placeholder="例如：字节跳动（选填）" />
+            </label>
+            <label class="field">
+              <span>岗位</span>
+              <input id="jobTitle" placeholder="例如：后端开发实习生" />
+            </label>
+          </div>
+          <label class="field grow">
+            <span>JD 原文（选填）</span>
+            <textarea id="jobJd" placeholder="把招聘要求粘贴进来…"></textarea>
+          </label>
+        </section>
+
+        <section class="pane" id="paneDocs" hidden>
+          <div class="pane-head">
+            <div class="pane-title">
+              <h2>资料库</h2>
+              <p class="hint">
+                项目文档、面经、笔记都行。<b>点任意一篇，右侧打开全文</b>；提问时只注入最相关的那几段。
+              </p>
+            </div>
+            <div class="pane-meta"><span class="state" id="docsState">0 段</span></div>
+          </div>
+          <div class="uploader" id="dropDocs">
+            <div class="uploader-bar">
+              <button id="btnAddDoc" class="ghost">上传资料文件</button>
+              <span class="formats">PDF · DOCX · TXT · MD</span>
+              <span class="count" id="docCount">0 篇 · 0 段</span>
+            </div>
+            <p class="drop-hint">也可以把文件直接拖到这里</p>
+          </div>
+          <ul class="doc-list" id="docList"></ul>
+        </section>
+
+        <section class="pane" id="paneModel" hidden>
+          <div class="pane-head">
+            <div class="pane-title">
+              <h2>AI 接口</h2>
+              <p class="hint">用你自己的接口，Key 只存在本机 <code>.user-data\settings.json</code>，不经过任何第三方。右侧是实际会发出的请求。</p>
+            </div>
+            <div class="pane-meta"><span class="state" id="modelState">未配置</span></div>
+          </div>
+          <div class="grid2">
+            <label class="field">
+              <span>服务商</span>
+              <select id="fProvider"></select>
+            </label>
+            <label class="field">
+              <span>接口地址（OpenAI 兼容）</span>
+              <input id="fEndpoint" placeholder="https://api.deepseek.com/v1" />
+            </label>
+          </div>
+          <div class="grid2">
+            <label class="field">
+              <span>API Key</span>
+              <input id="fApiKey" type="password" placeholder="sk-..." />
+            </label>
+            <label class="field">
+              <span>文本模型</span>
+              <input id="fModel" placeholder="deepseek-chat" />
+            </label>
+          </div>
+          <div class="row">
+            <button id="btnPing" class="ghost">测试连接</button>
+            <span class="count" id="pingState"></span>
+          </div>
+        </section>
+      </main>
+
+      <!-- 右侧：文件侧栏预览 -->
+      <aside class="preview" id="preview">
+        <div class="preview-head">
+          <div class="preview-title">
+            <b id="previewName">简历</b>
+            <span id="previewMeta"></span>
+          </div>
+          <button id="btnCopyPreview" class="ghost small">复制</button>
+          <button id="btnTogglePreview" class="winbtn" title="收起侧栏">›</button>
+        </div>
+        <div class="preview-body" id="previewBody"></div>
+      </aside>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+    <script src="setup.js"></script>
+  </body>
+</html>

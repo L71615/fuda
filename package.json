@@ -1,0 +1,28 @@
+﻿{
+  "name": "fuda",
+  "productName": "浮答",
+  "version": "0.3.0",
+  "private": true,
+  "description": "浮答：本地版面试悬浮助手。隐身浮窗 + 截屏提问 + 任意 OpenAI 兼容模型，无后端、不收费",
+  "main": "src/main/index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "set ELECTRON_RUN_AS_NODE= && runtime\\electron.exe .",
+    "self-test": "set ELECTRON_RUN_AS_NODE= && runtime\\electron.exe . --self-test",
+    "get-electron": "node tools/get-electron.cjs",
+    "icon": "node tools/make-ico.cjs",
+    "launcher": "node tools/build-launcher.cjs",
+    "dist": "node tools/make-ico.cjs && node tools/build-launcher.cjs && node tools/build-manual.cjs",
+    "test:core": "node tools/test-core.cjs",
+    "test:ipc": "node tools/test-ipc.cjs",
+    "check": "node tools/check-syntax.cjs && node tools/check-renderer.cjs"
+  },
+  "dependencies": {
+    "koffi": "2.16.2",
+    "mammoth": "^1.8.0",
+    "pdfjs-dist": "^3.11.174"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0"
+  }
+}
