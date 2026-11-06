@@ -1,7 +1,7 @@
 {
   "name": "fuda",
   "productName": "浮答",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "浮答：本地版面试悬浮助手。隐身浮窗 + 截屏提问 + 系统声音听题 + 任意 OpenAI 兼容模型，无后端、不收费",
   "main": "src/main/index.js",
@@ -15,6 +15,7 @@
     "dist": "node tools/make-ico.cjs && node tools/build-launcher.cjs && node tools/build-manual.cjs",
     "test:core": "node tools/test-core.cjs",
     "test:ipc": "node tools/test-ipc.cjs",
+    "test:vad": "node tools/test-vad.cjs",
     "check": "node tools/check-syntax.cjs && node tools/check-renderer.cjs"
   },
   "dependencies": {

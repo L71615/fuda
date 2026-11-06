@@ -229,6 +229,16 @@ function startMockServer() {
     assert.match(text, /转写完成/);
   });
 
+  await test("llm.transcribe: 用户误填完整 /audio/transcriptions 地址也能用", async () => {
+    const text = await llm.transcribe({
+      baseUrl: `${base}/audio/transcriptions`,
+      model: "whisper-1",
+      audio: new Uint8Array([1, 2, 3, 4]),
+      mime: "audio/webm",
+    });
+    assert.match(text, /转写完成/);
+  });
+
   await test("llm.transcribe: wav 片段带 language 与正确扩展名", async () => {
     transcribeBody = Buffer.alloc(0);
     const text = await llm.transcribe({

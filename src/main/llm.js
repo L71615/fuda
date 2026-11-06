@@ -272,7 +272,11 @@ async function transcribe({
   language = "",
   timeoutMs = 60000,
 }) {
-  const base = String(baseUrl || "").trim().replace(/\/+$/, "").replace(/\/chat\/completions$/i, "");
+  const base = String(baseUrl || "")
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/chat\/completions$/i, "")
+    .replace(/\/audio\/transcriptions$/i, "");
   const ext = /wav/i.test(mime) ? "wav" : /mp3/i.test(mime) ? "mp3" : /m4a/i.test(mime) ? "m4a" : "webm";
   const form = new FormData();
   form.append("file", new Blob([audio], { type: mime }), `audio.${ext}`);

@@ -681,6 +681,38 @@ async function captureScreen(displayId) {
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
+function makeAsrTestWav() {
+  const rate = 16000;
+  const samples = Math.round(rate * 0.4);
+  const out = Buffer.alloc(44 + samples * 2);
+  out.write("RIFF", 0);
+  out.writeUInt32LE(36 + samples * 2, 4);
+  out.write("WAVE", 8);
+  out.write("fmt ", 12);
+  out.writeUInt32LE(16, 16);
+  out.writeUInt16LE(1, 20);
+  out.writeUInt16LE(1, 22);
+  out.writeUInt32LE(rate, 24);
+  out.writeUInt32LE(rate * 2, 28);
+  out.writeUInt16LE(2, 32);
+  out.writeUInt16LE(16, 34);
+  out.write("data", 36);
+  out.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < samples; i += 1) {
+    const value = Math.sin((2 * Math.PI * 440 * i) / rate) * 0.12;
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(value * 32767))), 44 + i * 2);
+  }
+  return out;
+}
+
+function asrErrorMessage(err) {
+  const message = String((err && err.message) || err);
+  if (/HTTP 401|HTTP 403/i.test(message)) return `${message}（Key 无权限或未填）`;
+  if (/HTTP 404/i.test(message)) return `${message}（该服务没有 /audio/transcriptions，请换 ASR 地址或模型）`;
+  if (/abort|timeout|超时/i.test(message)) return `${message}（转写超时）`;
+  return message;
+}
+
 function registerIpc() {
   // ---------------- 工作台：简历 / 岗位 / 资料库 ----------------
   const profileState = () => {
@@ -1003,7 +1035,7 @@ function registerIpc() {
     return false;
   });
 
-  // 语音转写：渲染层把系统声音切成 5 秒 WAV 片段，这里转发给 /audio/transcriptions。
+  // 语音转写：渲染层把系统声音按 VAD 断句切成 WAV 片段，这里转发给 /audio/transcriptions。
   // ASR 可以单独配 endpoint / key（本地 whisper、专用转写服务），留空才沿用聊天配置。
   ipcMain.handle("asr:transcribe", async (_e, payload) => {
     try {
@@ -1022,7 +1054,31 @@ function registerIpc() {
       });
       return { ok: true, text };
     } catch (err) {
-      return { ok: false, error: String((err && err.message) || err) };
+      return { ok: false, error: asrErrorMessage(err) };
+    }
+  });
+
+  // 设置页“测试转写”：用一段 0.4 秒的测试音走一遍真实接口，确认 endpoint / key / model 可用。
+  ipcMain.handle("asr:test", async (_e, payload = {}) => {
+    try {
+      const endpoint = String(payload.endpoint || "").trim() || settings.endpoint;
+      if (!endpoint) return { ok: false, error: "先填 ASR 接口地址" };
+      if (!/^https?:\/\//i.test(endpoint)) {
+        return { ok: false, error: "ASR 接口地址要以 http:// 或 https:// 开头" };
+      }
+      const apiKey = String(payload.apiKey || "").trim() || settings.apiKey;
+      const text = await llm.transcribe({
+        baseUrl: endpoint,
+        apiKey,
+        model: String(payload.model || "").trim() || settings.asrModel || "whisper-1",
+        language: String(payload.language || "").trim(),
+        audio: makeAsrTestWav(),
+        mime: "audio/wav",
+        timeoutMs: 15000,
+      });
+      return { ok: true, text };
+    } catch (err) {
+      return { ok: false, error: asrErrorMessage(err) };
     }
   });
 }

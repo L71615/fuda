@@ -373,7 +373,7 @@ const invoke = (channel, payload) => {
       "stealth:status", "stealth:apply", "stealth:read-affinity", "window:action",
       "capture:screen", "clipboard:read", "clipboard:write", "records:list",
       "records:add", "records:clear", "models:list", "llm:ping", "chat:start",
-      "chat:abort", "asr:transcribe",
+      "chat:abort", "asr:transcribe", "asr:test",
     ];
     const missing = expected.filter((c) => !handlers.has(c));
     assert.deepEqual(missing, [], `缺少通道: ${missing.join(", ")}`);
@@ -518,6 +518,18 @@ const invoke = (channel, payload) => {
     const res = await invoke("asr:transcribe", { audio: [1, 2, 3], mime: "audio/webm" });
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.text, "听写结果");
+  });
+
+  await test("asr:test 用测试音验证 ASR 接口", async () => {
+    const res = await invoke("asr:test", { endpoint: base, model: "sensevoice-small" });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.text, "听写结果");
+  });
+
+  await test("asr:test 拒绝非 http(s) 地址", async () => {
+    const res = await invoke("asr:test", { endpoint: "file:///etc/passwd" });
+    assert.equal(res.ok, false);
+    assert.ok(/http/.test(res.error));
   });
 
   await test("设置写坏了的 endpoint 时错误只回给渲染层，不抛到主进程", async () => {

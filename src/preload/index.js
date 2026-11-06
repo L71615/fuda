@@ -91,6 +91,7 @@ const api = {
   // 语音转写
   asr: {
     transcribe: (audioBytes, mime) => ipcRenderer.invoke("asr:transcribe", { audio: audioBytes, mime }),
+    test: (payload) => ipcRenderer.invoke("asr:test", payload),
   },
 
   // 工作台（简历 / 岗位 / 资料库）

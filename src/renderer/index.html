@@ -126,6 +126,10 @@
               <small>留空交给模型自动判断；中文面试建议 zh</small>
             </label>
           </div>
+          <div class="inline-status">
+            <button class="link" id="btnAsrTest">测试转写</button>
+            <span id="asrTestState">发 0.4 秒测试音，确认接口和模型能用</span>
+          </div>
 
           <div class="section-title">生成参数</div>
           <div class="row">
@@ -180,6 +184,7 @@
         </div>
       </section>
     </div>
+    <script src="vad.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

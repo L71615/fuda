@@ -425,12 +425,21 @@ let recordTimer = null;
 const MAX_RECORD_MS = 60000;
 
 // ---------------------------------------------------------------------------
-// 听题：系统声音回环 → 16k 单声道 PCM → 5 秒 WAV 片段 → 逐段转写
+// 听题：系统声音回环 → 16k 单声道 PCM → VAD 断句 → WAV 片段 → 逐段转写
 // 麦克风只作为“线下面对面”的备选；默认优先抓系统输出，戴耳机也能听到面试官。
 // ---------------------------------------------------------------------------
-const LISTEN_CHUNK_MS = 5000;
 const LISTEN_MIN_MS = 500;
 const LISTEN_TARGET_RATE = 16000;
+const LISTEN_MAX_QUEUE = 4;
+const LISTEN_VAD = {
+  startRms: 0.0045,
+  endRms: 0.0025,
+  silenceMs: 1400,
+  minSpeechMs: 1200,
+  maxSegmentMs: 12000,
+  preRollMs: 300,
+  tailMs: 200,
+};
 const listen = {
   active: false,
   connecting: false,
@@ -439,9 +448,8 @@ const listen = {
   source: null,
   processor: null,
   gain: null,
+  segmenter: null,
   sampleRate: 0,
-  pending: [],
-  pendingSamples: 0,
   queue: [],
   sending: false,
   runId: 0,
@@ -450,7 +458,9 @@ const listen = {
   timer: null,
   rms: 0,
   lastText: "",
+  buffer: "",
   errors: 0,
+  dropped: 0,
   sourceKind: "",
 };
 
@@ -543,32 +553,35 @@ function encodeWav(samples, sampleRate) {
   return new Uint8Array(buffer);
 }
 
-function takeListenPcm() {
-  if (!listen.pendingSamples) return null;
-  const all = new Float32Array(listen.pendingSamples);
-  let offset = 0;
-  for (const part of listen.pending) {
-    all.set(part, offset);
-    offset += part.length;
-  }
-  listen.pending = [];
-  listen.pendingSamples = 0;
-  return all;
-}
-
 function enqueueListenChunk(samples) {
   if (!samples || !samples.length) return;
   let sum = 0;
   for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
   const rms = Math.sqrt(sum / samples.length);
-  // 固定切片 + 静音门限：完全没声音的片段不发请求，省额度也省延迟。
+  // VAD 已经按语音边界切过；这里再兜底一次，完全静音的片段不发请求。
   if (rms < 0.0012) return;
   if (samples.length < (listen.sampleRate || LISTEN_TARGET_RATE) * (LISTEN_MIN_MS / 1000)) return;
 
   const pcm = downsample(samples, listen.sampleRate || LISTEN_TARGET_RATE, LISTEN_TARGET_RATE);
   const wav = encodeWav(pcm, LISTEN_TARGET_RATE);
+  if (listen.queue.length >= LISTEN_MAX_QUEUE) {
+    listen.queue.shift();
+    listen.dropped += 1;
+    if (listen.dropped === 1) toast("转写积压，已丢弃最早的一段", 3000);
+  }
   listen.queue.push(wav);
   drainListenQueue(listen.runId);
+}
+
+function flushListenBuffer() {
+  if (!listen.buffer) return;
+  const text = listen.buffer;
+  listen.buffer = "";
+  const input = $("input");
+  input.value = input.value.trim() ? `${input.value.replace(/\s+$/, "")} ${text}` : text;
+  // 不抢焦点：面试时悬浮窗一旦 focus 会把焦点从会议页面抢走。
+  input.scrollTop = input.scrollHeight;
+  autoGrow(input);
 }
 
 function appendListenText(text) {
@@ -576,11 +589,25 @@ function appendListenText(text) {
   if (!clean || clean === listen.lastText) return;
   listen.lastText = clean;
   $("listenCaption").textContent = clean;
-  const input = $("input");
-  input.value = input.value.trim() ? `${input.value.replace(/\s+$/, "")} ${clean}` : clean;
-  // 不抢焦点：面试时悬浮窗一旦 focus 会把焦点从会议页面抢走。
-  input.scrollTop = input.scrollHeight;
-  autoGrow(input);
+  listen.buffer = listen.buffer ? `${listen.buffer} ${clean}` : clean;
+  // 模型正在流式回答时先攒着，等回答结束再放进输入框，避免把“下一题”覆盖到当前输入里。
+  if (!state.streaming) flushListenBuffer();
+}
+
+async function transcribeWithRetry(bytes, runId) {
+  let lastError = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (listen.runId !== runId) return null;
+    try {
+      const res = await window.api.asr.transcribe(bytes, "audio/wav");
+      if (res && res.ok) return res;
+      lastError = (res && res.error) || "未知错误";
+    } catch (err) {
+      lastError = (err && err.message) || String(err);
+    }
+    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+  throw new Error(lastError || "转写失败");
 }
 
 async function drainListenQueue(runId) {
@@ -589,22 +616,18 @@ async function drainListenQueue(runId) {
   while (listen.queue.length && listen.runId === runId) {
     const bytes = listen.queue.shift();
     try {
-      const res = await window.api.asr.transcribe(bytes, "audio/wav");
+      const res = await transcribeWithRetry(bytes, runId);
       if (listen.runId !== runId) break;
-      if (res && res.ok) {
-        appendListenText(res.text);
-      } else {
-        listen.errors += 1;
-        if (listen.errors <= 2) {
-          toast(
-            `听题转写失败：${(res && res.error) || "未知错误"}；可在设置 → 语音转写里单独配置 ASR`,
-            5200
-          );
-        }
-      }
+      if (res && res.ok) appendListenText(res.text);
     } catch (err) {
+      if (listen.runId !== runId) break;
       listen.errors += 1;
-      if (listen.errors <= 2) toast(`听题转写出错：${(err && err.message) || err}`, 3800);
+      if (listen.errors <= 2) {
+        toast(
+          `听题转写失败：${(err && err.message) || err}；可在设置 → 语音转写里单独配置 ASR`,
+          5200
+        );
+      }
     }
   }
   listen.sending = false;
@@ -622,6 +645,7 @@ async function drainListenQueue(runId) {
 }
 
 function cleanupListenAudio() {
+  listen.segmenter = null;
   if (listen.processor) {
     listen.processor.onaudioprocess = null;
     try {
@@ -668,6 +692,12 @@ async function createListenPipeline(stream) {
   }
   listen.ctx = ctx;
   listen.sampleRate = ctx.sampleRate || LISTEN_TARGET_RATE;
+  if (!window.FudaVad || !window.FudaVad.createSegmenter) {
+    throw new Error("听题组件未加载（vad.js）");
+  }
+  listen.segmenter = window.FudaVad.createSegmenter(
+    Object.assign({ sampleRate: listen.sampleRate }, LISTEN_VAD)
+  );
   listen.source = ctx.createMediaStreamSource(stream);
   listen.processor = ctx.createScriptProcessor(4096, 1, 1);
   listen.gain = ctx.createGain();
@@ -676,18 +706,13 @@ async function createListenPipeline(stream) {
   listen.processor.connect(listen.gain);
   listen.gain.connect(ctx.destination);
   listen.processor.onaudioprocess = (event) => {
-    if (!listen.active) return;
+    if (!listen.active || !listen.segmenter) return;
     const input = event.inputBuffer.getChannelData(0);
     let sum = 0;
     for (let i = 0; i < input.length; i += 1) sum += input[i] * input[i];
     listen.rms = Math.sqrt(sum / input.length);
-    listen.pending.push(new Float32Array(input));
-    listen.pendingSamples += input.length;
-    const target = Math.round(listen.sampleRate * (LISTEN_CHUNK_MS / 1000));
-    if (listen.pendingSamples >= target) {
-      const samples = takeListenPcm();
-      if (samples) enqueueListenChunk(samples);
-    }
+    const segments = listen.segmenter.push(new Float32Array(input));
+    for (const segment of segments) enqueueListenChunk(segment);
   };
   if (ctx.state === "suspended" && ctx.resume) await ctx.resume();
 }
@@ -730,10 +755,11 @@ async function startListening() {
     listen.stream = opened.stream;
     listen.sourceKind = opened.kind;
     listen.queue = [];
-    listen.pending = [];
-    listen.pendingSamples = 0;
+    listen.segmenter = null;
     listen.lastText = "";
+    listen.buffer = "";
     listen.errors = 0;
+    listen.dropped = 0;
     listen.startedAt = Date.now();
     listen.active = true;
     listen.connecting = false;
@@ -767,9 +793,10 @@ function stopListening(reason = "手动停止") {
   listen.token += 1;
   listen.active = false;
   listen.connecting = false;
-  if (listen.pendingSamples > (listen.sampleRate || LISTEN_TARGET_RATE) * (LISTEN_MIN_MS / 1000)) {
-    const rest = takeListenPcm();
-    if (rest) enqueueListenChunk(rest);
+  if (listen.segmenter) {
+    const rest = listen.segmenter.flush();
+    listen.segmenter = null;
+    for (const segment of rest) enqueueListenChunk(segment);
   }
   cleanupListenAudio();
   $("btnMic").classList.remove("recording");
@@ -970,6 +997,8 @@ function finishStream() {
   state.streamId = null;
   $("btnSend").disabled = false;
   $("btnStop").hidden = true;
+  // 回答期间听题继续跑；结束后再把“下一题”放进输入框，期间不覆盖用户正在看的内容。
+  flushListenBuffer();
 }
 
 /**
@@ -1127,6 +1156,7 @@ function bindEvents() {
     applyProviderPreset(event.target.value);
   });
   $("btnSaveSettings").addEventListener("click", saveSettings);
+  $("btnAsrTest").addEventListener("click", testAsr);
   $("btnTest").addEventListener("click", async () => {
     const out = $("probeOutput");
     out.hidden = false;
@@ -1309,14 +1339,52 @@ async function openSettings() {
   $("affinityRead").textContent = await window.api.stealth.readAffinity();
 }
 
+async function testAsr() {
+  const btn = $("btnAsrTest");
+  const stateEl = $("asrTestState");
+  if (!btn || !stateEl) return;
+  const endpoint = $("fAsrEndpoint").value.trim();
+  if (endpoint && !/^https?:\/\//i.test(endpoint)) {
+    toast("ASR 接口地址要以 http:// 或 https:// 开头", 3600);
+    return;
+  }
+  btn.disabled = true;
+  stateEl.textContent = "正在发测试音…";
+  try {
+    const res = await window.api.asr.test({
+      endpoint,
+      apiKey: $("fAsrApiKey").value,
+      model: $("fAsrModel").value.trim() || "whisper-1",
+      language: $("fAsrLanguage").value.trim(),
+    });
+    if (res && res.ok) {
+      stateEl.textContent = res.text ? `成功：${res.text.slice(0, 40)}` : "成功：接口可用（返回空文本）";
+      toast("ASR 接口测试通过", 2600);
+    } else {
+      stateEl.textContent = `失败：${(res && res.error) || "未知错误"}`;
+      toast(`ASR 测试失败：${(res && res.error) || "未知错误"}`, 5200);
+    }
+  } catch (err) {
+    stateEl.textContent = `失败：${(err && err.message) || err}`;
+    toast(`ASR 测试出错：${(err && err.message) || err}`, 4200);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function saveSettings() {
+  const asrEndpoint = $("fAsrEndpoint").value.trim();
+  if (asrEndpoint && !/^https?:\/\//i.test(asrEndpoint)) {
+    toast("ASR 接口地址要以 http:// 或 https:// 开头", 3600);
+    return;
+  }
   const patch = {
     provider: $("fProvider").value,
     endpoint: $("fEndpoint").value.trim(),
     apiKey: $("fApiKey").value,
     model: $("fModel").value.trim(),
     visionModel: $("fVisionModel").value.trim(),
-    asrEndpoint: $("fAsrEndpoint").value.trim(),
+    asrEndpoint,
     asrApiKey: $("fAsrApiKey").value,
     asrModel: $("fAsrModel").value.trim() || "whisper-1",
     asrLanguage: $("fAsrLanguage").value.trim(),
