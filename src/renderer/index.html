@@ -37,6 +37,15 @@
         </div>
       </main>
 
+      <div class="listen-bar" id="listenBar" hidden>
+        <span class="listen-dot" id="listenDot"></span>
+        <span class="listen-state" id="listenState">听题中</span>
+        <span class="listen-time" id="listenTime">00:00</span>
+        <span class="listen-level"><i id="listenLevel"></i></span>
+        <span class="listen-caption" id="listenCaption">正在听系统声音…</span>
+        <button class="link" id="btnListenStop">停止</button>
+      </div>
+
       <div class="attach-bar" id="attachBar" hidden>
         <img id="attachThumb" alt="截图预览" />
         <div class="attach-meta">
@@ -92,6 +101,32 @@
               <input id="fVisionModel" type="text" spellcheck="false" placeholder="留空 = 沿用文本模型" />
             </label>
           </div>
+
+          <div class="section-title">语音转写（听题）</div>
+          <div class="row">
+            <label class="field">
+              <span>ASR 接口地址（留空沿用上面的）</span>
+              <input id="fAsrEndpoint" type="text" spellcheck="false" placeholder="http://127.0.0.1:8080/v1" />
+              <small>支持 /audio/transcriptions 的 OpenAI 兼容服务，本地 whisper 也行</small>
+            </label>
+            <label class="field">
+              <span>ASR API Key（留空沿用上面的）</span>
+              <input id="fAsrApiKey" type="password" spellcheck="false" placeholder="留空 = 用上面的 Key" />
+            </label>
+          </div>
+          <div class="row">
+            <label class="field">
+              <span>ASR 模型</span>
+              <input id="fAsrModel" type="text" spellcheck="false" placeholder="whisper-1" />
+              <small>硅基流动可填 FunAudioLLM/SenseVoiceSmall</small>
+            </label>
+            <label class="field">
+              <span>语言</span>
+              <input id="fAsrLanguage" type="text" spellcheck="false" placeholder="zh" />
+              <small>留空交给模型自动判断；中文面试建议 zh</small>
+            </label>
+          </div>
+
           <div class="section-title">生成参数</div>
           <div class="row">
             <label class="field">

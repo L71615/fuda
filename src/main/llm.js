@@ -263,11 +263,21 @@ async function listModels({ baseUrl, apiKey = "", timeoutMs = 8000 }) {
 }
 
 /** 语音转写（OpenAI 兼容 /audio/transcriptions，可用于本地 whisper 服务）。 */
-async function transcribe({ baseUrl, apiKey = "", model = "whisper-1", audio, mime = "audio/webm", timeoutMs = 60000 }) {
+async function transcribe({
+  baseUrl,
+  apiKey = "",
+  model = "whisper-1",
+  audio,
+  mime = "audio/webm",
+  language = "",
+  timeoutMs = 60000,
+}) {
   const base = String(baseUrl || "").trim().replace(/\/+$/, "").replace(/\/chat\/completions$/i, "");
+  const ext = /wav/i.test(mime) ? "wav" : /mp3/i.test(mime) ? "mp3" : /m4a/i.test(mime) ? "m4a" : "webm";
   const form = new FormData();
-  form.append("file", new Blob([audio], { type: mime }), "audio.webm");
+  form.append("file", new Blob([audio], { type: mime }), `audio.${ext}`);
   form.append("model", model);
+  if (language && String(language).trim()) form.append("language", String(language).trim());
   const headers = {};
   if (apiKey && apiKey.trim()) headers.authorization = `Bearer ${apiKey.trim()}`;
   const controller = new AbortController();

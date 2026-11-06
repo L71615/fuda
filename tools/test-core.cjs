@@ -29,6 +29,7 @@ function test(name, fn) {
 }
 
 // ---------------------------------------------------------------- mock server
+let transcribeBody = Buffer.alloc(0);
 function startMockServer() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -65,11 +66,12 @@ function startMockServer() {
         return;
       }
       if (req.url === "/v1/audio/transcriptions") {
-        let size = 0;
-        req.on("data", (c) => (size += c.length));
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
         req.on("end", () => {
+          transcribeBody = Buffer.concat(chunks);
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ text: `转写完成(${size} 字节)` }));
+          res.end(JSON.stringify({ text: `转写完成(${transcribeBody.length} 字节)` }));
         });
         return;
       }
@@ -225,6 +227,22 @@ function startMockServer() {
       mime: "audio/webm",
     });
     assert.match(text, /转写完成/);
+  });
+
+  await test("llm.transcribe: wav 片段带 language 与正确扩展名", async () => {
+    transcribeBody = Buffer.alloc(0);
+    const text = await llm.transcribe({
+      baseUrl: base,
+      model: "sensevoice-small",
+      audio: new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]),
+      mime: "audio/wav",
+      language: "zh",
+    });
+    assert.match(text, /转写完成/);
+    const form = transcribeBody.toString("latin1");
+    assert.match(form, /filename="audio\.wav"/);
+    assert.match(form, /name="model"\r\n\r\nsensevoice-small/);
+    assert.match(form, /name="language"\r\n\r\nzh/);
   });
 
   server.close();

@@ -1003,16 +1003,22 @@ function registerIpc() {
     return false;
   });
 
-  // 语音转写：渲染层用 MediaRecorder 录成 webm，这里转发给 OpenAI 兼容的 /audio/transcriptions
+  // 语音转写：渲染层把系统声音切成 5 秒 WAV 片段，这里转发给 /audio/transcriptions。
+  // ASR 可以单独配 endpoint / key（本地 whisper、专用转写服务），留空才沿用聊天配置。
   ipcMain.handle("asr:transcribe", async (_e, payload) => {
     try {
       const audio = new Uint8Array(payload.audio || []);
+      if (!audio.length) return { ok: false, error: "没有音频数据" };
+      if (audio.length > 25 * 1024 * 1024) return { ok: false, error: "音频片段过大" };
+      const baseUrl = String(settings.asrEndpoint || "").trim() || settings.endpoint;
+      const apiKey = String(settings.asrApiKey || "").trim() || settings.apiKey;
       const text = await llm.transcribe({
-        baseUrl: settings.endpoint,
-        apiKey: settings.apiKey,
+        baseUrl,
+        apiKey,
         model: settings.asrModel || "whisper-1",
+        language: settings.asrLanguage || "",
         audio,
-        mime: payload.mime || "audio/webm",
+        mime: payload.mime || "audio/wav",
       });
       return { ok: true, text };
     } catch (err) {
@@ -1047,10 +1053,38 @@ if (!singleInstance) {
     bootLog("app ready");
     Menu.setApplicationMenu(null);
 
-    // 只放行「麦克风录音 + 剪贴板」这两类权限，其余一律拒绝（渲染层不联网，也不需要别的）
+    // 听题要抓系统声音：Electron 在 Windows 上用 loopback 把扬声器输出作为音频轨道。
+    // 视频轨道只是 getDisplayMedia 的载体，渲染层不渲染但必须保留：停掉后 loopback 音频会断。
+    session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+      try {
+        if (process.platform !== "win32") {
+          callback({});
+          return;
+        }
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 0, height: 0 },
+        });
+        const primaryId = String(screen.getPrimaryDisplay().id);
+        const source = sources.find((s) => String(s.display_id) === primaryId) || sources[0];
+        if (!source) {
+          callback({});
+          return;
+        }
+        callback({ video: source, audio: "loopback" });
+      } catch (err) {
+        bootLog("系统声音回环失败: " + ((err && err.message) || err));
+        try {
+          callback({});
+        } catch {}
+      }
+    });
+
+    // 只放行「麦克风录音 + 屏幕音频 + 剪贴板」这几类权限，其余一律拒绝（渲染层不联网，也不需要别的）
     const ALLOWED_PERMISSIONS = new Set([
       "media",
       "audioCapture",
+      "display-capture",
       "clipboard-read",
       "clipboard-sanitized-write",
     ]);

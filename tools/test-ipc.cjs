@@ -280,6 +280,7 @@ const fakeElectron = {
     defaultSession: {
       setPermissionRequestHandler() {},
       setPermissionCheckHandler() {},
+      setDisplayMediaRequestHandler() {},
     },
   },
 };

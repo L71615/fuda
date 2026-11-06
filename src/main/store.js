@@ -68,7 +68,11 @@ const DEFAULT_SETTINGS = {
   apiKey: "",
   model: "gpt-4o-mini",
   visionModel: "", // 留空则沿用 model
+  // 听题：默认沿用上面的 endpoint / apiKey；也可以单独指向本地 whisper 服务
+  asrEndpoint: "",
+  asrApiKey: "",
   asrModel: "whisper-1",
+  asrLanguage: "zh",
   answerCard: true,
   temperature: 0.3,
   maxTokens: 1500,

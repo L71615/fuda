@@ -1,9 +1,9 @@
-﻿{
+{
   "name": "fuda",
   "productName": "浮答",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "浮答：本地版面试悬浮助手。隐身浮窗 + 截屏提问 + 任意 OpenAI 兼容模型，无后端、不收费",
+  "description": "浮答：本地版面试悬浮助手。隐身浮窗 + 截屏提问 + 系统声音听题 + 任意 OpenAI 兼容模型，无后端、不收费",
   "main": "src/main/index.js",
   "license": "MIT",
   "scripts": {

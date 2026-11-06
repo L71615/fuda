@@ -18,8 +18,8 @@ const MODE_HINTS = {
   answer: { label: "答题", placeholder: "粘贴面试官的问题，Enter 发送…", extra: "" },
   listen: {
     label: "听题",
-    placeholder: "截屏或粘贴面试官刚说的话（Ctrl+D 截屏）…",
-    extra: "当前模式：实时听题。请先判断面试官在问什么，再按答题要求输出。",
+    placeholder: "点 🎙 开始听系统声音，或粘贴/截屏面试官的问题…",
+    extra: "当前模式：听题。输入可能来自系统声音的连续转写，先判断面试官在问什么，再按答题要求输出。",
   },
   code: {
     label: "代码",
@@ -424,6 +424,374 @@ let recorder = null;
 let recordTimer = null;
 const MAX_RECORD_MS = 60000;
 
+// ---------------------------------------------------------------------------
+// 听题：系统声音回环 → 16k 单声道 PCM → 5 秒 WAV 片段 → 逐段转写
+// 麦克风只作为“线下面对面”的备选；默认优先抓系统输出，戴耳机也能听到面试官。
+// ---------------------------------------------------------------------------
+const LISTEN_CHUNK_MS = 5000;
+const LISTEN_MIN_MS = 500;
+const LISTEN_TARGET_RATE = 16000;
+const listen = {
+  active: false,
+  connecting: false,
+  stream: null,
+  ctx: null,
+  source: null,
+  processor: null,
+  gain: null,
+  sampleRate: 0,
+  pending: [],
+  pendingSamples: 0,
+  queue: [],
+  sending: false,
+  runId: 0,
+  token: 0,
+  startedAt: 0,
+  timer: null,
+  rms: 0,
+  lastText: "",
+  errors: 0,
+  sourceKind: "",
+};
+
+function listenSetState(text) {
+  const el = $("listenState");
+  if (el) el.textContent = text;
+}
+
+function formatClock(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
+}
+
+async function openListenStream() {
+  let systemError = null;
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      throw new Error("当前环境不支持系统声音采集");
+    }
+    // 视频轨道只是 getDisplayMedia 的载体，不渲染，但必须保留：
+    // 停掉 video 后 Chromium 的 loopback 音频缓冲约 1.8 秒就停止回调（实测）。
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      // 视频只用来维持回环会话，压到 640×360 / 1fps，避免长时间面试占显存。
+      video: { frameRate: 1, width: { max: 640 }, height: { max: 360 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    const audio = stream.getAudioTracks()[0];
+    if (audio) return { stream, kind: "system" };
+    stream.getTracks().forEach((t) => t.stop());
+    systemError = new Error("没有拿到系统声音轨道");
+  } catch (err) {
+    systemError = err;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    return { stream, kind: "mic" };
+  } catch (err) {
+    const a = (systemError && systemError.message) || "未知";
+    const b = (err && err.message) || err;
+    throw new Error(`系统声音不可用（${a}），麦克风也不可用（${b}）`);
+  }
+}
+
+function downsample(samples, from, to) {
+  if (from === to) return samples;
+  const ratio = from / to;
+  const length = Math.max(1, Math.floor(samples.length / ratio));
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(samples.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    let count = 0;
+    for (let j = start; j < end; j += 1) {
+      sum += samples[j];
+      count += 1;
+    }
+    out[i] = count ? sum / count : 0;
+  }
+  return out;
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeText = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeText(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeText(8, "WAVE");
+  writeText(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Uint8Array(buffer);
+}
+
+function takeListenPcm() {
+  if (!listen.pendingSamples) return null;
+  const all = new Float32Array(listen.pendingSamples);
+  let offset = 0;
+  for (const part of listen.pending) {
+    all.set(part, offset);
+    offset += part.length;
+  }
+  listen.pending = [];
+  listen.pendingSamples = 0;
+  return all;
+}
+
+function enqueueListenChunk(samples) {
+  if (!samples || !samples.length) return;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+  const rms = Math.sqrt(sum / samples.length);
+  // 固定切片 + 静音门限：完全没声音的片段不发请求，省额度也省延迟。
+  if (rms < 0.0012) return;
+  if (samples.length < (listen.sampleRate || LISTEN_TARGET_RATE) * (LISTEN_MIN_MS / 1000)) return;
+
+  const pcm = downsample(samples, listen.sampleRate || LISTEN_TARGET_RATE, LISTEN_TARGET_RATE);
+  const wav = encodeWav(pcm, LISTEN_TARGET_RATE);
+  listen.queue.push(wav);
+  drainListenQueue(listen.runId);
+}
+
+function appendListenText(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean || clean === listen.lastText) return;
+  listen.lastText = clean;
+  $("listenCaption").textContent = clean;
+  const input = $("input");
+  input.value = input.value.trim() ? `${input.value.replace(/\s+$/, "")} ${clean}` : clean;
+  // 不抢焦点：面试时悬浮窗一旦 focus 会把焦点从会议页面抢走。
+  input.scrollTop = input.scrollHeight;
+  autoGrow(input);
+}
+
+async function drainListenQueue(runId) {
+  if (listen.sending) return;
+  listen.sending = true;
+  while (listen.queue.length && listen.runId === runId) {
+    const bytes = listen.queue.shift();
+    try {
+      const res = await window.api.asr.transcribe(bytes, "audio/wav");
+      if (listen.runId !== runId) break;
+      if (res && res.ok) {
+        appendListenText(res.text);
+      } else {
+        listen.errors += 1;
+        if (listen.errors <= 2) {
+          toast(
+            `听题转写失败：${(res && res.error) || "未知错误"}；可在设置 → 语音转写里单独配置 ASR`,
+            5200
+          );
+        }
+      }
+    } catch (err) {
+      listen.errors += 1;
+      if (listen.errors <= 2) toast(`听题转写出错：${(err && err.message) || err}`, 3800);
+    }
+  }
+  listen.sending = false;
+  // 上一轮还在转写时用户又开始了新一轮：旧 drain 退出后要把新队列接起来。
+  if (listen.queue.length) {
+    drainListenQueue(listen.runId);
+    return;
+  }
+  if (!listen.active && !listen.queue.length) {
+    listenSetState("已停止");
+    setTimeout(() => {
+      if (!listen.active && !listen.sending) $("listenBar").hidden = true;
+    }, 1500);
+  }
+}
+
+function cleanupListenAudio() {
+  if (listen.processor) {
+    listen.processor.onaudioprocess = null;
+    try {
+      listen.processor.disconnect();
+    } catch {}
+    listen.processor = null;
+  }
+  if (listen.source) {
+    try {
+      listen.source.disconnect();
+    } catch {}
+    listen.source = null;
+  }
+  if (listen.gain) {
+    try {
+      listen.gain.disconnect();
+    } catch {}
+    listen.gain = null;
+  }
+  if (listen.ctx) {
+    const ctx = listen.ctx;
+    listen.ctx = null;
+    try {
+      ctx.close();
+    } catch {}
+  }
+  if (listen.stream) {
+    listen.stream.getTracks().forEach((t) => t.stop());
+    listen.stream = null;
+  }
+  if (listen.timer) {
+    clearInterval(listen.timer);
+    listen.timer = null;
+  }
+}
+
+async function createListenPipeline(stream) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  let ctx;
+  try {
+    ctx = new Ctx({ sampleRate: LISTEN_TARGET_RATE });
+  } catch {
+    ctx = new Ctx();
+  }
+  listen.ctx = ctx;
+  listen.sampleRate = ctx.sampleRate || LISTEN_TARGET_RATE;
+  listen.source = ctx.createMediaStreamSource(stream);
+  listen.processor = ctx.createScriptProcessor(4096, 1, 1);
+  listen.gain = ctx.createGain();
+  listen.gain.gain.value = 0;
+  listen.source.connect(listen.processor);
+  listen.processor.connect(listen.gain);
+  listen.gain.connect(ctx.destination);
+  listen.processor.onaudioprocess = (event) => {
+    if (!listen.active) return;
+    const input = event.inputBuffer.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < input.length; i += 1) sum += input[i] * input[i];
+    listen.rms = Math.sqrt(sum / input.length);
+    listen.pending.push(new Float32Array(input));
+    listen.pendingSamples += input.length;
+    const target = Math.round(listen.sampleRate * (LISTEN_CHUNK_MS / 1000));
+    if (listen.pendingSamples >= target) {
+      const samples = takeListenPcm();
+      if (samples) enqueueListenChunk(samples);
+    }
+  };
+  if (ctx.state === "suspended" && ctx.resume) await ctx.resume();
+}
+
+function listenTick() {
+  if (!listen.active) return;
+  $("listenTime").textContent = formatClock(Date.now() - listen.startedAt);
+  const level = Math.min(100, Math.round(listen.rms * 900));
+  $("listenLevel").style.width = `${level}%`;
+  if (listen.sending && !listen.queue.length) listenSetState("转写中…");
+  else listenSetState(listen.sourceKind === "system" ? "听题中" : "麦克风听题中");
+}
+
+async function startListening() {
+  if (listen.active || listen.connecting) return;
+  if (state.streaming) {
+    toast("上一轮还在回答，先等一下");
+    return;
+  }
+  if (!navigator.mediaDevices) {
+    toast("当前环境不支持音频采集", 3600);
+    return;
+  }
+
+  listen.connecting = true;
+  const token = ++listen.token;
+  listen.runId += 1;
+  listenSetState("连接系统声音…");
+  $("listenBar").hidden = false;
+  $("listenTime").textContent = "00:00";
+  $("listenLevel").style.width = "0%";
+  $("listenCaption").textContent = "正在连接系统声音…";
+
+  try {
+    const opened = await openListenStream();
+    if (token !== listen.token) {
+      opened.stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    listen.stream = opened.stream;
+    listen.sourceKind = opened.kind;
+    listen.queue = [];
+    listen.pending = [];
+    listen.pendingSamples = 0;
+    listen.lastText = "";
+    listen.errors = 0;
+    listen.startedAt = Date.now();
+    listen.active = true;
+    listen.connecting = false;
+    await createListenPipeline(listen.stream);
+    if (token !== listen.token) {
+      cleanupListenAudio();
+      return;
+    }
+    listen.timer = setInterval(listenTick, 500);
+    listenTick();
+    $("listenCaption").textContent =
+      opened.kind === "system" ? "正在听系统声音…" : "正在听麦克风…";
+    $("btnMic").classList.add("recording");
+    toast(
+      opened.kind === "system" ? "听题中：正在听系统声音" : "没拿到系统声音，已切到麦克风",
+      3200
+    );
+  } catch (err) {
+    listen.connecting = false;
+    listen.active = false;
+    cleanupListenAudio();
+    $("btnMic").classList.remove("recording");
+    $("listenBar").hidden = true;
+    toast(`开始听题失败：${(err && err.message) || err}`, 5000);
+  }
+}
+
+function stopListening(reason = "手动停止") {
+  if (!listen.active && !listen.connecting) return;
+  const wasActive = listen.active;
+  listen.token += 1;
+  listen.active = false;
+  listen.connecting = false;
+  if (listen.pendingSamples > (listen.sampleRate || LISTEN_TARGET_RATE) * (LISTEN_MIN_MS / 1000)) {
+    const rest = takeListenPcm();
+    if (rest) enqueueListenChunk(rest);
+  }
+  cleanupListenAudio();
+  $("btnMic").classList.remove("recording");
+  if (wasActive) {
+    listenSetState("已停止");
+    toast(reason === "手动停止" ? "已停止听题" : reason, 1800);
+  }
+  setTimeout(() => {
+    if (!listen.active && !listen.sending) $("listenBar").hidden = true;
+  }, 2200);
+  if (listen.queue.length) drainListenQueue(listen.runId);
+}
+
+function onMicClick() {
+  if (state.mode !== "listen") {
+    doMic();
+    return;
+  }
+  if (listen.active || listen.connecting) stopListening("手动停止");
+  else startListening();
+}
+
 async function doMic() {
   const btn = $("btnMic");
 
@@ -708,7 +1076,8 @@ function bindEvents() {
   });
   $("btnCapture").addEventListener("click", doCapture);
   $("btnRescue").addEventListener("click", doRescue);
-  $("btnMic").addEventListener("click", doMic);
+  $("btnMic").addEventListener("click", onMicClick);
+  $("btnListenStop").addEventListener("click", () => stopListening("手动停止"));
   $("btnClipboard").addEventListener("click", async () => {
     const text = await window.api.clipboard.read();
     if (!text) return toast("剪贴板是空的");
@@ -737,6 +1106,18 @@ function bindEvents() {
       btn.classList.add("active");
       state.mode = btn.dataset.mode;
       $("input").placeholder = MODE_HINTS[state.mode].placeholder;
+      $("btnMic").title =
+        state.mode === "listen"
+          ? "听题：点一下开始听系统声音，再点一下停止"
+          : "语音提问：点一下开始录音，再点一下停止并转文字";
+      if (listen.active && state.mode !== "listen") stopListening("切换模式");
+      state.settings.mode = state.mode;
+      window.api.settings
+        .save({ mode: state.mode })
+        .then((s) => {
+          state.settings = s;
+        })
+        .catch(() => {});
     });
   });
 
@@ -906,6 +1287,10 @@ function fillSettingsForm() {
   $("fApiKey").value = s.apiKey || "";
   $("fModel").value = s.model;
   $("fVisionModel").value = s.visionModel || "";
+  $("fAsrEndpoint").value = s.asrEndpoint || "";
+  $("fAsrApiKey").value = s.asrApiKey || "";
+  $("fAsrModel").value = s.asrModel || "whisper-1";
+  $("fAsrLanguage").value = s.asrLanguage || "zh";
   $("fTemperature").value = s.temperature;
   $("fMaxTokens").value = s.maxTokens;
   $("fTimeout").value = Math.round((s.timeoutMs || 120000) / 1000);
@@ -931,6 +1316,10 @@ async function saveSettings() {
     apiKey: $("fApiKey").value,
     model: $("fModel").value.trim(),
     visionModel: $("fVisionModel").value.trim(),
+    asrEndpoint: $("fAsrEndpoint").value.trim(),
+    asrApiKey: $("fAsrApiKey").value,
+    asrModel: $("fAsrModel").value.trim() || "whisper-1",
+    asrLanguage: $("fAsrLanguage").value.trim(),
     temperature: Number($("fTemperature").value),
     maxTokens: Number($("fMaxTokens").value),
     timeoutMs: Number($("fTimeout").value) * 1000,
@@ -962,6 +1351,10 @@ async function boot() {
     b.classList.toggle("active", b.dataset.mode === state.mode)
   );
   $("input").placeholder = MODE_HINTS[state.mode].placeholder;
+  $("btnMic").title =
+    state.mode === "listen"
+      ? "听题：点一下开始听系统声音，再点一下停止"
+      : "语音提问：点一下开始录音，再点一下停止并转文字";
 
   bindEvents();
   fillSettingsForm();
